@@ -65,12 +65,7 @@ H, W, D, T, N = [st.session_state.preprocessed[k] for k in ["H","W","D","T","N"]
 # EDV/ESV Finder 
 # --------------------------------------------------------------
 if view == "EDV/ESV Finder 🔍":
-    edv_esv_view(edv_esv_frames= st.session_state.preprocessed['edv_esv_frames'],
-                 raw_lv_dia_idx=st.session_state.raw['raw_lv_dia_idx'], 
-                 raw_rv_dia_idx=st.session_state.raw['raw_rv_dia_idx'], 
-                 raw_lv_sys_idx=st.session_state.raw['raw_lv_sys_idx'], 
-                 raw_rv_sys_idx=st.session_state.raw['raw_rv_sys_idx'], 
-                 T = T)
+    edv_esv_view()
 
 
 # --------------------------------------------------------------
@@ -78,35 +73,31 @@ if view == "EDV/ESV Finder 🔍":
 # --------------------------------------------------------------
 
 if view == "Mask Editor 📝":
-    mask_editor_view(
-        N=N, D=D, H=H, W=W,
-        image=st.session_state.preprocessed["image"],
-        lv_dia_idx=st.session_state.edv_esv_selected["lv_dia_idx"],
-        lv_sys_idx=st.session_state.edv_esv_selected["lv_sys_idx"],
-        rv_dia_idx=st.session_state.edv_esv_selected["rv_dia_idx"],
-        rv_sys_idx=st.session_state.edv_esv_selected["rv_sys_idx"],
-        OVERLAY_COLORS=OVERLAY_COLORS
-    )
+    mask_editor_view()
 
 
 # --------------------------------------------------------------
 # Final Result
 # --------------------------------------------------------------
 if view == "Final Result ✅":
+    raw = st.session_state.raw
+    preprocessed = st.session_state.preprocessed
+
+    raw_image = raw["image"]
+    raw_mask = raw["mask"]
+    preprocessed_image = preprocessed["image"]
+    H, W, D, T, N = [preprocessed[k] for k in ["H","W","D","T","N"]]
+
+    crop_box = preprocessed['crop_box']
+    
     if not st.session_state.edv_esv_selected["confirmed"]:
         st.error("Select and confirm EDV/ESV first.")
         st.stop()
 
-    raw_image = st.session_state.raw["image"]
-    raw_mask = st.session_state.raw["mask"]
-    preprocessed_image = st.session_state.preprocessed["image"]
-
-    crop_box = st.session_state.preprocessed["crop_box"]
-
-    raw_lv_dia_idx = st.session_state.raw["raw_lv_dia_idx"]
-    raw_lv_sys_idx = st.session_state.raw["raw_lv_sys_idx"]
-    raw_rv_dia_idx = st.session_state.raw["raw_rv_dia_idx"]
-    raw_rv_sys_idx = st.session_state.raw["raw_rv_sys_idx"]
+    raw_lv_dia_idx = raw["raw_lv_dia_idx"]
+    raw_lv_sys_idx = raw["raw_lv_sys_idx"]
+    raw_rv_dia_idx = raw["raw_rv_dia_idx"]
+    raw_rv_sys_idx = raw["raw_rv_sys_idx"]
 
     lv_dia_idx = st.session_state['edv_esv_selected']["lv_dia_idx"]
     lv_sys_idx = st.session_state['edv_esv_selected']["lv_sys_idx"]
@@ -116,8 +107,10 @@ if view == "Final Result ✅":
     final_lv_gif_path = f"results/gifs/{sax_series_uid}_lv.gif"
     final_rv_gif_path = f"results/gifs/{sax_series_uid}_rv.gif"
 
+    lv_mask = cv_zoom(st.session_state['edited_mask_lv'], zoom = [1/st.session_state['subpixel_resolution'],1/st.session_state['subpixel_resolution'],1,1])
+    rv_mask = cv_zoom(st.session_state['edited_mask_rv'], zoom = [1/st.session_state['subpixel_resolution'],1/st.session_state['subpixel_resolution'],1,1])
+
     # Calculate LV metrics
-    lv_mask = st.session_state.edited_mask_lv
     lv_volume, lv_masses, lv_edv, lv_esv, lv_sv, lv_ef, lv_mass = calculate_sax_metrics(
         mask=lv_mask,
         pixelspacing=pixelspacing,
@@ -138,7 +131,6 @@ if view == "Final Result ✅":
     )
 
     # Calculate RV metrics
-    rv_mask = st.session_state.edited_mask_rv
     rv_volume, rv_masses, rv_edv, rv_esv, rv_sv, rv_ef, rv_mass = calculate_sax_metrics(
         mask=rv_mask,
         pixelspacing=pixelspacing,

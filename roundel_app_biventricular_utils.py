@@ -54,8 +54,8 @@ lv_idx = 1
 rv_myo_idx = 4
 
 BACKGROUND_COLOR = (0, 0, 0, 0)
-RV_MYO_COLOR = (0, 255, 10, 10)  # Bright forest reen
-RV_COLOR = (255, 255, 10, 50)      # Yellow
+RV_MYO_COLOR = (0, 200, 10, 50)  # Bright forest reen
+RV_COLOR = (255, 190, 10, 50)      # Yellow
 LV_MYO_COLOR =  (0, 255, 255, 50) # Blue
 LV_COLOR = (255, 10, 10, 50)       # Red
 
@@ -70,8 +70,8 @@ OVERLAY_COLORS = {
 }
 
 BRUSH_LABELS = {
-    rv_idx: 'RV Blood Pool 🟡',
     rv_myo_idx: 'RV Myocardium 🟢',
+    rv_idx: 'RV Blood Pool 🟡',
     lv_myo_idx: 'LV Myocardium 🔵',
     lv_idx: 'LV Blood Pool 🔴',
 }
@@ -79,6 +79,13 @@ BRUSH_LABELS = {
 VENTRICLE_CHANNEL = {'lv':[lv_idx, lv_myo_idx],
                      'rv':[rv_idx, rv_myo_idx]}
 
+
+BRUSH_LABELS = dict(
+    sorted(
+        BRUSH_LABELS.items(),
+        key=lambda item: 0 if 'myocardium' in item[1].lower() else 1
+    )
+)
 
 
 def cv_zoom(images, zoom=[4,4,1,1,1], interpolation=cv2.INTER_CUBIC):
@@ -232,16 +239,13 @@ def initialize_app(data_path, sax_series_uid, N, preprocess=True):
         preprocessed_mask = raw_mask[y_min:y_max, x_min:x_max, :, :, :].astype('uint8')
         H, W, D, T, N = preprocessed_mask.shape
 
-        make_video(preprocessed_image, preprocessed_mask, save_file=preprocessed_gif_path)
-
         has_masks = np.where(np.sum(preprocessed_mask[...,mask_channels], axis = (0,1,3,-1))>0)[0]
         mid_slice = len(has_masks)//2
 
-        make_video(preprocessed_image[:,:,has_masks[mid_slice-3:mid_slice+3],:], preprocessed_mask[:,:,has_masks[mid_slice-3:mid_slice+3],:, :] * 0, save_file=edv_esv_gif_path)
-
-
         smoothed_image = cv_zoom(preprocessed_image, zoom = [st.session_state['subpixel_resolution'],st.session_state['subpixel_resolution'],1,1])
         smoothed_mask = smooth_zoom(preprocessed_mask, zoom = [st.session_state['subpixel_resolution'],st.session_state['subpixel_resolution'],1,1,1])
+        
+        make_video(smoothed_image[:,:,has_masks[mid_slice-3:mid_slice+3],:], smoothed_mask[:,:,has_masks[mid_slice-3:mid_slice+3],:, :] * 0, save_file=edv_esv_gif_path)
         make_video(smoothed_image, smoothed_mask*0, save_file=blank_gif_path)
 
         gif = Image.open(f'{edv_esv_gif_path}.gif')
@@ -417,125 +421,6 @@ def make_video(image, mask, save_file, ventricle = 'all', mask_frames = 'all',sc
         frames.append(canvas.convert("RGB"))
     save_file = save_file.replace('.gif','')
     imageio.mimsave(f'{save_file}.gif', frames, fps=timesteps/2, loop=0)
-
-
-def remake_gif_frames(
-    input_gif,
-    output_gif,
-    image,
-    mask,
-    redo_frames,
-    ventricle,
-    mask_frames="all",
-    scale=1
-    ):
-
-    if ventricle == 'rv':
-        channels = [rv_idx, rv_myo_idx]
-    elif ventricle == 'lv':
-        channels = [lv_idx, lv_myo_idx]
-    else:
-        channels = np.arange(N)
-    gif_frames = imageio.mimread(input_gif)
-    frames = [Image.fromarray(f).convert("RGB") for f in gif_frames]
-
-    position = image.shape[2]
-    timesteps = image.shape[3]
-
-    grid_rows = int(np.sqrt(position) + 0.5)
-    grid_cols = (position + grid_rows - 1) // grid_rows
-
-    H, W = image.shape[:2]
-    GIF_W = frames[0].width // grid_cols
-    GIF_H = frames[0].height // grid_rows
-
-    H_scaled = round(GIF_H * scale)
-    W_scaled = round(GIF_W * scale)
-
-    img_min = np.min(image)
-    img_max = np.max(image)
-
-    try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            int(18 * scale),
-        )
-    except:
-        font = ImageFont.load_default()
-
-    if mask_frames == "all":
-        mask_frames = np.arange(timesteps)
-
-    for t in redo_frames:
-        canvas = Image.new(
-            "RGBA",
-            (grid_cols * W_scaled, grid_rows * H_scaled),
-            color=(0, 0, 0, 255),
-        )
-        draw_canvas = ImageDraw.Draw(canvas)
-
-        for idx in range(position):
-            row, col = divmod(idx, grid_cols)
-
-            image_slice = (
-                (image[:, :, idx, t] - img_min)
-                / (img_max - img_min + 1e-9)
-                * 255
-            ).astype(np.uint8)
-
-            img_rgb = np.stack([image_slice] * 3, axis=-1)
-            img_pil = Image.fromarray(img_rgb, mode="RGB").convert("RGBA")
-            img_pil = img_pil.resize((W_scaled, H_scaled), Image.NEAREST)
-
-            overlay = np.zeros((H, W, 4), dtype=np.uint8)
-            if t in mask_frames:
-                for ch in channels:
-                    ch_mask = mask[:, :, idx, t, ch]
-                    if np.any(ch_mask):
-                        overlay[ch_mask > 0] = OVERLAY_COLORS[ch]
-
-            overlay_pil = Image.fromarray(overlay, "RGBA").resize(
-                (W_scaled, H_scaled), Image.NEAREST
-            )
-            img_pil.alpha_composite(overlay_pil)
-
-            draw_tile = ImageDraw.Draw(img_pil)
-            draw_tile.rectangle(
-                [0, 0, int(28 * scale), int(22 * scale)],
-                fill=(211, 211, 211, 255),
-            )
-            draw_tile.text(
-                (3 * scale, 2 * scale),
-                f"{idx}",
-                fill=(0, 0, 0, 255),
-                font=font,
-            )
-
-            canvas.paste(
-                img_pil,
-                (col * W_scaled, row * H_scaled),
-                img_pil,
-            )
-
-        draw_canvas.rectangle(
-            [
-                canvas.width - int(60 * scale),
-                canvas.height - int(20 * scale),
-                canvas.width,
-                canvas.height,
-            ],
-            fill=(211, 211, 211, 255),
-        )
-        draw_canvas.text(
-            (canvas.width - int(55 * scale), canvas.height - int(20 * scale)),
-            f"{t:02}/{timesteps - 1:02}",
-            fill=(0, 0, 0, 255),
-            font=font,
-        )
-
-        frames[t] = canvas.convert("RGB")
-    output_gif = output_gif.replace('.gif','')
-    imageio.mimsave(f'{output_gif}.gif', frames, fps=timesteps/2, loop=0)
 
 
 
@@ -741,15 +626,6 @@ def plot_volume_curve(
 
 
 
-def confirm_selection(lv_dia_idx, lv_sys_idx,rv_dia_idx, rv_sys_idx):
-    """Store confirmed EDV/ESV indices in session state."""
-    st.session_state['edv_esv_selected'].update({
-        "lv_dia_idx": lv_dia_idx,
-        "lv_sys_idx": lv_sys_idx,
-        "rv_dia_idx": rv_dia_idx,
-        "rv_sys_idx": rv_sys_idx,
-        "confirmed": True
-    })
 
 def wrap(key, min_val, max_val):
     if st.session_state[key] > max_val:
@@ -779,10 +655,44 @@ def frame_index_slider(
     return idx
 
 
-def edv_esv_view(edv_esv_frames, raw_lv_dia_idx, raw_lv_sys_idx, raw_rv_dia_idx, raw_rv_sys_idx, T):
+def confirm_selection(lv_dia_idx, lv_sys_idx,rv_dia_idx, rv_sys_idx):
+    """Store confirmed EDV/ESV indices in session state."""
+    st.session_state['edv_esv_selected'].update({
+        "lv_dia_idx": lv_dia_idx,
+        "lv_sys_idx": lv_sys_idx,
+        "rv_dia_idx": rv_dia_idx,
+        "rv_sys_idx": rv_sys_idx,
+        "confirmed": True
+    })
+
+
+    make_video(
+        st.session_state.preprocessed['smooth_image'][:,:,:, [lv_dia_idx, lv_sys_idx]],
+        st.session_state.preprocessed['smooth_mask'][:,:,:, [lv_dia_idx, lv_sys_idx], :],
+        save_file=f'{edited_gif_path}_lv',
+        ventricle = 'lv'
+
+    )
+
+    make_video(
+        st.session_state.preprocessed['smooth_image'][:,:,:, [rv_dia_idx, rv_sys_idx]],
+        st.session_state.preprocessed['smooth_mask'][:,:,:, [rv_dia_idx, rv_sys_idx], :],
+        save_file=f'{edited_gif_path}_rv',
+        ventricle = 'rv'
+
+    )
+
+def edv_esv_view():
     """Full EDV/ESV Finder view layout."""
     if "edv_esv_selected" not in st.session_state:
         st.session_state['edv_esv_selected'] = {"lv_dia_idx": None, "lv_sys_idx": None, "rv_dia_idx": None, "rv_sys_idx": None,"confirmed": False}
+    
+    H, W, D, T, N = [st.session_state.preprocessed[k] for k in ["H","W","D","T","N"]]
+    edv_esv_frames= st.session_state.preprocessed['edv_esv_frames']
+    raw_lv_dia_idx=st.session_state.raw['raw_lv_dia_idx']
+    raw_rv_dia_idx=st.session_state.raw['raw_rv_dia_idx'] 
+    raw_lv_sys_idx=st.session_state.raw['raw_lv_sys_idx'] 
+    raw_rv_sys_idx=st.session_state.raw['raw_rv_sys_idx'] 
 
     disabled_flag = st.session_state['edv_esv_selected']["confirmed"]
 
@@ -816,32 +726,10 @@ def edv_esv_view(edv_esv_frames, raw_lv_dia_idx, raw_lv_sys_idx, raw_rv_dia_idx,
             type="primary",
             use_container_width=True
         )
+
+
     else:
         st.success("EDV | ESV Confirmed!")
-
-    # Generate video if confirmed
-    if st.session_state['edv_esv_selected']["confirmed"]:
-        for ventricle in ['lv','rv']:
-            print(1)
-            dia_idx = st.session_state['edv_esv_selected'][f"{ventricle}_dia_idx"] 
-            sys_idx = st.session_state['edv_esv_selected'][f"{ventricle}_sys_idx"] 
-
-
-            remake_gif_frames(
-                blank_gif_path,
-                f'{edited_gif_path}_{ventricle}',
-                st.session_state.preprocessed["smooth_image"],
-                st.session_state.preprocessed["smooth_mask"],
-                redo_frames=[dia_idx, sys_idx]
-            )
-
-            # make_video(
-            #     st.session_state.preprocessed["smooth_mask"][:,:,:, [dia_idx, sys_idx]],
-            #     st.session_state[f'edited_mask_{ventricle}'][:,:,:, [dia_idx, sys_idx], :],
-            #     save_file=f'{edited_gif_path}_{ventricle}',
-            #     ventricle = ventricle
-
-            # )
 
 
 
@@ -880,25 +768,6 @@ def get_overlay(img_slice, mask_state, H, W, N, OVERLAY_COLORS, ventricle):
             overlay = Image.alpha_composite(overlay, Image.fromarray(mask_img))
     return overlay
 
-def select_brush(N):
-    """Brush selection UI for channel, action, and stroke width."""
-    action = st.radio("Brush Stroke Selection", options=["Paint ✏️", "Erase ✂️"],  index=0, horizontal=True)
-    stroke_width_map = {"thin":6,"medium":20,"thick":40}
-    stroke_width_sel = st.radio("Stroke width", options=list(stroke_width_map.keys()),  index= 0 if action == "Paint ✏️" else 2, horizontal=True)
-    stroke_width = stroke_width_map[stroke_width_sel]
-
-    if action == "Paint ✏️":
-        valid_channels = [i for i in range(N) if i != background_idx]
-        channel = st.radio(
-            "Mask",
-            options=valid_channels,
-            format_func=lambda x: BRUSH_LABELS[x],
-            index=0,
-            horizontal=True
-        )
-    else:
-        channel = 0
-    return channel, action, stroke_width
 
 def select_brush(N, ventricle):
     """Brush selection UI for channel, action, and stroke width."""
@@ -908,9 +777,9 @@ def select_brush(N, ventricle):
     stroke_width = stroke_width_map[stroke_width_sel]
 
     if ventricle == 'lv':
-        valid_channels = [i for i in range(N) if i in [lv_idx, lv_myo_idx]]
+        valid_channels = [i for i in range(N) if i in [lv_myo_idx, lv_idx]]
     elif ventricle == 'rv':
-        valid_channels = [i for i in range(N) if i in [rv_idx, rv_myo_idx]]
+        valid_channels = [i for i in range(N) if i in [rv_myo_idx, rv_idx]]
     else:
         valid_channels = [i for i in range(N) if i != background_idx]
 
@@ -928,7 +797,7 @@ def select_brush(N, ventricle):
 
 
 
-def mask_editor_view(N, D, H, W, image, lv_dia_idx, lv_sys_idx, rv_dia_idx, rv_sys_idx, OVERLAY_COLORS):
+def mask_editor_view():
     """Full Mask Editor layout."""
     if not st.session_state['edv_esv_selected']["confirmed"]:
         st.error("Select and confirm EDV/ESV first.")
@@ -985,75 +854,85 @@ def mask_editor_view(N, D, H, W, image, lv_dia_idx, lv_sys_idx, rv_dia_idx, rv_s
             )
 
 
-        current_objects = []
-        if canvas_result is not None and canvas_result.json_data is not None:
-            current_objects = canvas_result.json_data.get("objects", [])
+            current_objects = []
+            if canvas_result is not None and canvas_result.json_data is not None:
+                current_objects = canvas_result.json_data.get("objects", [])
 
-        if (
-            d != st.session_state['canvas']['previous_d']
-            and st.session_state['canvas']['previous_objects']
-        ):
-            st.session_state['canvas']['canvas_key'] = f'editor_{d}'
-            st.session_state['canvas']['previous_d'] = d
-            st.session_state['canvas']['previous_objects'] = []
-            st.rerun()
-
-        st.session_state['canvas']['previous_objects'] = current_objects
-
-        col1, col2= st.columns([1, 0.3])
-        edited_mask = st.session_state[f'edited_mask_{ventricle}']
-
-
-        with col1:
-            save_contour = st.button('Save Contour', type='primary', use_container_width=True)
-            if canvas_result and canvas_result.image_data is not None:
-                objects = canvas_result.json_data.get("objects", [])
-                if save_contour and objects:
-                    # Original canvas image
-                    brush_data = np.array(canvas_result.image_data)  # Hc x Wc x 4 (RGBA)
-                    rgb = brush_data[:, :, :3].astype(np.float32)
-                    alpha = brush_data[:, :, 3].astype(np.float32) / 255.0
-
-                    overlay_colors_list = np.array([color[:3] for color in OVERLAY_COLORS.values()], dtype=np.float32)
-                    overlay_channels = list(OVERLAY_COLORS.keys())
-
-                    h, w, _ = rgb.shape
-                    rgb_flat = rgb.reshape(-1, 3)
-                    alpha_flat = alpha.flatten()
-
-                    # Map each pixel to closest overlay color
-                    distances = np.linalg.norm(rgb_flat[:, None, :] - overlay_colors_list[None, :, :], axis=-1)
-                    closest_idx = np.argmin(distances, axis=1)
-
-                    # Prepare masks at canvas resolution
-                    mask_flat = np.zeros((h * w, len(overlay_channels)), dtype=np.uint8)
-                    for idx_color, channel in enumerate(overlay_channels):
-                        mask_flat[:, idx_color] = ((closest_idx == idx_color) & (alpha_flat > 0)).astype(np.uint8)
-
-                    # Reshape masks and apply stroke thickening
-                    masks = []
-                    for idx_color, channel in enumerate(overlay_channels):
-                        mask_bool = mask_flat[:, idx_color].reshape(h, w)
-                        mask_bool = thicken_close_fill_and_smooth(mask_bool, stroke_width)
-                        masks.append(mask_bool)
-
-                    # Combine all masks into a single array at canvas resolution
-                    combined_mask = np.stack(masks, axis=-1)  # Hc x Wc x num_channels
-
-                    # Resize all masks once at the end to target size
-                    for idx_color, channel in enumerate(overlay_channels):
-                        resized_mask = np.array(Image.fromarray(combined_mask[:, :, idx_color]).resize((W*st.session_state['subpixel_resolution'], H*st.session_state['subpixel_resolution']), resample=Image.NEAREST))
-
-                        # Clear affected pixels first
-                        edited_mask[:, :, d, idx, :][resized_mask > 0] = 0
-                        # Apply current channel
-                        edited_mask[:, :, d, idx, channel][resized_mask > 0] = 1
-                    st.rerun()
-
-        with col2:
-            if st.button('Clear Slice', use_container_width=True):
-                edited_mask[:,:,d,idx,:] = 0
+            if (
+                d != st.session_state['canvas']['previous_d']
+                and st.session_state['canvas']['previous_objects']
+            ):
+                st.session_state['canvas']['canvas_key'] = f'editor_{d}'
+                st.session_state['canvas']['previous_d'] = d
+                st.session_state['canvas']['previous_objects'] = []
                 st.rerun()
+
+            st.session_state['canvas']['previous_objects'] = current_objects
+
+            col1, col2= st.columns([1, 0.3])
+            edited_mask = st.session_state[f'edited_mask_{ventricle}']
+
+
+            with col1:
+                save_contour = st.button('Save Contour', type='primary', use_container_width=True)
+                if canvas_result and canvas_result.image_data is not None:
+                    objects = canvas_result.json_data.get("objects", [])
+                    if save_contour and objects:
+                        # Original canvas image
+                        brush_data = np.array(canvas_result.image_data)  # Hc x Wc x 4 (RGBA)
+                        rgb = brush_data[:, :, :3].astype(np.float32)
+                        alpha = brush_data[:, :, 3].astype(np.float32) / 255.0
+
+                        ventricle_indices = [
+                            idx for idx, label in BRUSH_LABELS.items()
+                            if ventricle in label.lower()
+                        ]
+
+                        # myocardium before blood pool
+                        overlay_channels = sorted(
+                            ventricle_indices,
+                            key=lambda idx: 0 if 'myocardium' in BRUSH_LABELS[idx].lower() else 1
+                        )
+
+                        overlay_colors_list = np.array([OVERLAY_COLORS[i][:3] for i in overlay_channels], dtype=np.float32)
+
+                        h, w, _ = rgb.shape
+                        rgb_flat = rgb.reshape(-1, 3)
+                        alpha_flat = alpha.flatten()
+
+                        # Map each pixel to closest overlay color
+                        distances = np.linalg.norm(rgb_flat[:, None, :] - overlay_colors_list[None, :, :], axis=-1)
+                        closest_idx = np.argmin(distances, axis=1)
+
+                        # Prepare masks at canvas resolution
+                        mask_flat = np.zeros((h * w, len(overlay_channels)), dtype=np.uint8)
+                        for idx_color, channel in enumerate(overlay_channels):
+                            mask_flat[:, idx_color] = ((closest_idx == idx_color) & (alpha_flat > 0)).astype(np.uint8)
+
+                        # Reshape masks and apply stroke thickening
+                        masks = []
+                        for idx_color, channel in enumerate(overlay_channels):
+                            mask_bool = mask_flat[:, idx_color].reshape(h, w)
+                            mask_bool = thicken_close_fill_and_smooth(mask_bool, stroke_width)
+                            masks.append(mask_bool)
+
+                        # Combine all masks into a single array at canvas resolution
+                        combined_mask = np.stack(masks, axis=-1)  # Hc x Wc x num_channels
+
+                        # Resize all masks once at the end to target size
+                        for idx_color, channel in enumerate(overlay_channels):
+                            resized_mask = np.array(Image.fromarray(combined_mask[:, :, idx_color]).resize((W*st.session_state['subpixel_resolution'], H*st.session_state['subpixel_resolution']), resample=Image.NEAREST))
+
+                            # Clear affected pixels first
+                            edited_mask[:, :, d, idx, :][resized_mask > 0] = 0
+                            # Apply current channel
+                            edited_mask[:, :, d, idx, channel][resized_mask > 0] = 1
+                        st.rerun()
+
+            with col2:
+                if st.button('Clear Slice', use_container_width=True):
+                    edited_mask[:,:,d,idx,:] = 0
+                    st.rerun()
 
 
 
@@ -1061,14 +940,13 @@ def mask_editor_view(N, D, H, W, image, lv_dia_idx, lv_sys_idx, rv_dia_idx, rv_s
     with col3:
         st.caption('Corrected Mask')
         if mask_hash(st.session_state[f'edited_mask_{ventricle}']) != st.session_state[f'mask_hash_{ventricle}']:
-            with st.spinner('Generating Corrected Mask...'):
-                make_video(
-                    image[:,:,:, [dia_idx, sys_idx]],
-                    st.session_state[f'edited_mask_{ventricle}'][:,:,:, [dia_idx, sys_idx], :],
-                    save_file=f'{edited_gif_path}_{ventricle}',
-                    ventricle = ventricle
+            make_video(
+                image[:,:,:, [dia_idx, sys_idx]],
+                st.session_state[f'edited_mask_{ventricle}'][:,:,:, [dia_idx, sys_idx], :],
+                save_file=f'{edited_gif_path}_{ventricle}',
+                ventricle = ventricle
 
-                )
+            )
             st.session_state[f'mask_hash_{ventricle}'] = mask_hash(st.session_state[f'edited_mask_{ventricle}'])
 
         gif = Image.open(f'{edited_gif_path}_{ventricle}.gif')
@@ -1090,9 +968,7 @@ def resize_to_original(edited_mask, raw_mask, crop_box, dia_idx, sys_idx):
     """
     x_min, y_min, x_max, y_max = crop_box
     final_mask_2d = np.zeros(raw_mask.shape, dtype=raw_mask.dtype)
-    # Place diastolic and systolic frames
     final_mask_2d[y_min:y_max, x_min:x_max, :, [dia_idx, sys_idx], 1:] = edited_mask[:, :, :, [dia_idx, sys_idx], 1:]
     final_mask_2d = np.argmax(final_mask_2d, axis=-1)
-
     return final_mask_2d
 
