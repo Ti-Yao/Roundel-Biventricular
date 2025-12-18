@@ -35,7 +35,7 @@ os.makedirs('results/masks', exist_ok=True)
 os.makedirs('results/edited_sax_df', exist_ok=True)
 
 GIF_W = 150
-DISPLAY_H = DISPLAY_W = 500
+DISPLAY_H = DISPLAY_W = 400
 
 blank_gif_path = f'results/temp/blank'
 full_edited_gif_path = f'results/temp/edited'
@@ -53,10 +53,10 @@ lv_myo_idx = 3
 lv_idx = 1
 rv_myo_idx = 4
 
-BACKGROUND_COLOR = (0, 0, 0, 0)
-RV_MYO_COLOR = (0, 200, 10, 50)  # Bright forest reen
+BACKGROUND_COLOR = (10, 10, 10, 0) # THIS HAS TO BE NON-ZERO
+RV_MYO_COLOR = (0, 200, 10, 50)    # Green
 RV_COLOR = (255, 190, 10, 50)      # Yellow
-LV_MYO_COLOR =  (0, 255, 255, 50) # Blue
+LV_MYO_COLOR =  (0, 255, 255, 50)  # Blue
 LV_COLOR = (255, 10, 10, 50)       # Red
 
 
@@ -164,7 +164,7 @@ def mini_divider():
 # Initialization
 # --------------------------------------------------------------
 def initialize_app(data_path, sax_series_uid, N, preprocess=True):
-    st.session_state['subpixel_resolution'] = 4
+    st.session_state['subpixel_resolution'] = 2
     
     # Store the last selected UID in session_state
     if "last_sax_uid" not in st.session_state:
@@ -242,6 +242,7 @@ def initialize_app(data_path, sax_series_uid, N, preprocess=True):
         has_masks = np.where(np.sum(preprocessed_mask[...,mask_channels], axis = (0,1,3,-1))>0)[0]
         mid_slice = len(has_masks)//2
 
+
         smoothed_image = cv_zoom(preprocessed_image, zoom = [st.session_state['subpixel_resolution'],st.session_state['subpixel_resolution'],1,1])
         smoothed_mask = smooth_zoom(preprocessed_mask, zoom = [st.session_state['subpixel_resolution'],st.session_state['subpixel_resolution'],1,1,1])
         
@@ -286,7 +287,9 @@ def initialize_app(data_path, sax_series_uid, N, preprocess=True):
     st.session_state['lv_frames'] = None
     st.session_state['rv_frames'] = None
     st.session_state['edit_made'] = False
+    st.session_state["saved"] = False
     st.session_state["view_mode"] = 'Static'
+    st.session_state["view"] = 'EDV/ESV Finder 🔍'
     st.session_state.initialized_all = True
 
 def format_delta(value, raw_value, suffix="", round_digits=None):
@@ -870,7 +873,7 @@ def mask_editor_view():
 
     with col2:
         edit_mode = st.radio('Segmentation Editor',['Editor','Viewer'], index=0, horizontal=True)
-        stroke_color = f"rgba{OVERLAY_COLORS[background_idx][:3]+(0.8,)}" if action == "Erase ✂️" else f"rgba{OVERLAY_COLORS[channel][:3]+(0.4,)}"
+        stroke_color = f"rgba{OVERLAY_COLORS[background_idx][:3]+(0.7,)}" if action == "Erase ✂️" else f"rgba{OVERLAY_COLORS[channel][:3]+(0.4,)}"
         if edit_mode == 'Viewer':
             st.image(image_slice, width=DISPLAY_W)
         else:
@@ -916,50 +919,53 @@ def mask_editor_view():
                 if canvas_result and canvas_result.image_data is not None:
                     objects = canvas_result.json_data.get("objects", [])
                     if save_contour and objects:
-                        # Original canvas image
-                        brush_data = np.array(canvas_result.image_data)  # Hc x Wc x 4 (RGBA)
-                        rgb = brush_data[:, :, :3].astype(np.float32)
-                        alpha = brush_data[:, :, 3].astype(np.float32) / 255.0
-
-                        ventricle_indices = [idx for idx, label in BRUSH_LABELS.items() if ventricle in label.lower()]
-
-                        # myocardium before blood pool
-                        overlay_channels = sorted(ventricle_indices, key=lambda idx: 0 if 'myocardium' in BRUSH_LABELS[idx].lower() else 1)
-                        overlay_colors_list = np.array([OVERLAY_COLORS[i][:3] for i in overlay_channels], dtype=np.float32)
-
-                        h, w, _ = rgb.shape
-                        rgb_flat = rgb.reshape(-1, 3)
-                        alpha_flat = alpha.flatten()
-
-                        # Map each pixel to closest overlay color
-                        distances = np.linalg.norm(rgb_flat[:, None, :] - overlay_colors_list[None, :, :], axis=-1)
-                        closest_idx = np.argmin(distances, axis=1)
-
-                        # Prepare masks at canvas resolution
-                        mask_flat = np.zeros((h * w, len(overlay_channels)), dtype=np.uint8)
-                        for idx_color, channel in enumerate(overlay_channels):
-                            mask_flat[:, idx_color] = ((closest_idx == idx_color) & (alpha_flat > 0)).astype(np.uint8)
-
-                        # Reshape masks and apply stroke thickening
-                        masks = []
-                        for idx_color, channel in enumerate(overlay_channels):
-                            mask_bool = mask_flat[:, idx_color].reshape(h, w)
-                            mask_bool = thicken_close_fill_and_smooth(mask_bool, stroke_width)
-                            masks.append(mask_bool)
-
-                        # Combine all masks into a single array at canvas resolution
-                        combined_mask = np.stack(masks, axis=-1)  # Hc x Wc x num_channels
-
-                        # Resize all masks once at the end to target size
-                        for idx_color, channel in enumerate(overlay_channels):
-                            resized_mask = np.array(Image.fromarray(combined_mask[:, :, idx_color]).resize((W*st.session_state['subpixel_resolution'], H*st.session_state['subpixel_resolution']), resample=Image.NEAREST))
-
-                            # Clear affected pixels first
+                        brush_data = np.array(canvas_result.image_data).astype(np.uint8)  # Hc x Wc x 4 (RGBA)
+                        if action == "Erase ✂️":
+                            mask_bin = np.any(brush_data[:, :, :3] != 0, axis=-1)
+                            mask_bin = thicken_close_fill_and_smooth(mask_bin, stroke_width)
+                            resized_mask = np.array(Image.fromarray(mask_bin).resize((W*st.session_state['subpixel_resolution'], H*st.session_state['subpixel_resolution']), resample=Image.NEAREST))
                             edited_mask[:, :, d, idx, :][resized_mask > 0] = 0
-                            # Apply current channel
-                            edited_mask[:, :, d, idx, channel][resized_mask > 0] = 1
+
+                        else:
+                            rgb = brush_data[:, :, :3].astype(np.float32)
+                            alpha = brush_data[:, :, 3].astype(np.float32) / 255.0
+
+                            overlay_channels = list(BRUSH_LABELS.keys())
+                            overlay_colors_list = np.array([OVERLAY_COLORS[i][:3] for i in overlay_channels], dtype=np.float32)
+
+                            h, w, _ = rgb.shape
+                            rgb_flat = rgb.reshape(-1, 3)
+                            alpha_flat = alpha.flatten()
+
+                            # Map each pixel to closest overlay color
+                            distances = np.linalg.norm(rgb_flat[:, None, :] - overlay_colors_list[None, :, :], axis=-1)
+                            closest_idx = np.argmin(distances, axis=1)
+
+                            # Prepare masks at canvas resolution
+                            mask_flat = np.zeros((h * w, len(overlay_channels)), dtype=np.uint8)
+                            for idx_color, channel in enumerate(overlay_channels):
+                                mask_flat[:, idx_color] = ((closest_idx == idx_color) & (alpha_flat > 0)).astype(np.uint8)
+
+                            # Reshape masks and apply stroke thickening
+                            masks = []
+                            for idx_color, channel in enumerate(overlay_channels):
+                                mask_bool = mask_flat[:, idx_color].reshape(h, w)
+                                mask_bool = thicken_close_fill_and_smooth(mask_bool, stroke_width)
+                                masks.append(mask_bool)
+
+                            # Combine all masks into a single array at canvas resolution
+                            combined_mask = np.stack(masks, axis=-1)  # Hc x Wc x num_channels
+
+                            # Resize all masks once at the end to target size
+                            for idx_color, channel in enumerate(overlay_channels):
+                                resized_mask = np.array(Image.fromarray(combined_mask[:, :, idx_color]).resize((W*st.session_state['subpixel_resolution'], H*st.session_state['subpixel_resolution']), resample=Image.NEAREST))
+
+                                # Clear affected pixels first
+                                edited_mask[:, :, d, idx, :][resized_mask > 0] = 0
+                                # Apply current channel
+                                edited_mask[:, :, d, idx, channel][resized_mask > 0] = 1
+
                         st.session_state['edit_made'] = True
-                        
                         st.rerun()
 
             with col2:
@@ -970,8 +976,6 @@ def mask_editor_view():
 
             st.session_state[f'edited_mask_{ventricle}'] = edited_mask
             
-
-
 
 
     with col3:

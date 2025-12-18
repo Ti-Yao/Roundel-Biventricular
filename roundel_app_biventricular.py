@@ -7,8 +7,15 @@ st.set_page_config(page_title="Roundel (Biventricular)", page_icon="⭕️", lay
 # -----------------------------
 # Data paths and series info
 # -----------------------------
-data_path = './data/test'
+data_path = './data/julius'
 sax_series_uid_list = sorted([uid.replace('image___','').split('/')[-1].replace('.nii.gz','') for uid in glob.glob(f'{data_path}/*') if 'image' in uid and 'bi' in uid])
+saved_sax_series_uid_list = [uid.split('/')[-1].replace('.csv','') for uid in glob.glob(f'results/edited_sax_df/*')]
+
+sax_series_uid_list = sorted(set(sax_series_uid_list).difference(set(saved_sax_series_uid_list)))
+
+if len(sax_series_uid_list) == 0:
+    st.success("🎉 All Roundel cases completed!")
+    st.stop()
 
 # Sidebar dropdown
 st.write('# Roundel App (2D Biventricular)')
@@ -20,6 +27,7 @@ with col1:
         options=sax_series_uid_list,
         index=0  # optional: preselect the first UID
     )
+    
 
 initialize_app(data_path, sax_series_uid, N, preprocess=True)
 pixelspacing, thickness = st.session_state.raw['pixelspacing'], st.session_state.raw['thickness']
@@ -37,12 +45,14 @@ with col2:
 # App
 # --------------------------------------------------------------
 
-view = st.segmented_control(
+view = st.radio(
     "Tab",
     options=["EDV/ESV Finder 🔍", "Mask Editor 📝", "Final Result ✅"],
-    default = "EDV/ESV Finder 🔍",
-    label_visibility='hidden'
+    index=["EDV/ESV Finder 🔍", "Mask Editor 📝", "Final Result ✅"].index(st.session_state["view"]),
+    horizontal=True
 )
+st.session_state["view"] = view
+
 mini_divider()
 
 H, W, D, T, N = [st.session_state.preprocessed[k] for k in ["H","W","D","T","N"]]
@@ -158,11 +168,11 @@ if view == "Final Result ✅":
                ventricle='all')
     
 
-    col_lv, col_rv = st.columns(2)
+    col_lv, _, col_rv = st.columns([1,0.05,1])
     with col_lv:
         st.markdown('#### Left Ventricle')
 
-        col1, col2 = st.columns([0.25,0.8])
+        col1, col2 = st.columns([0.3,0.7])
         with col1:
             st.caption("LV Metrics")
             st.metric("EDV", f"{lv_edv:.1f}mL", delta=format_delta(lv_edv, raw_lv_edv, "mL"))
@@ -177,7 +187,7 @@ if view == "Final Result ✅":
     with col_rv:
         st.markdown('#### Right Ventricle')
 
-        col1, col2 = st.columns([0.25,0.8])
+        col1, col2 = st.columns([0.3,0.7])
         with col1:
             st.caption("RV Metrics")
             st.metric("EDV", f"{rv_edv:.1f}mL", delta=format_delta(rv_edv, raw_rv_edv, "mL"))
@@ -191,16 +201,13 @@ if view == "Final Result ✅":
             st.image(final_rv_gif_path)
 
     
-    if st.button('Save Masks and Metrics', type='primary', use_container_width=True):
+    if st.button('Save Masks and Metrics 💾', type='primary', use_container_width=True):
         st.success('Masks and Metrics Saved!')
 
         # Save LV mask
-        nib_lv_mask = nib.Nifti1Image(final_lv_mask, affine=np.eye(4), dtype='uint8')
-        nib.save(nib_lv_mask, f'results/masks/{sax_series_uid}_lv.nii.gz')
+        nib_mask = nib.Nifti1Image(final_mask_2d, affine=np.eye(4), dtype='uint8')
+        nib.save(nib_mask, f'results/masks/{sax_series_uid}.nii.gz')
 
-        # Save RV mask
-        nib_rv_mask = nib.Nifti1Image(final_rv_mask, affine=np.eye(4), dtype='uint8')
-        nib.save(nib_rv_mask, f'results/masks/{sax_series_uid}_rv.nii.gz')
 
         # Prepare LV metrics
         lv_df = pd.DataFrame({
@@ -239,4 +246,9 @@ if view == "Final Result ✅":
         # Combine LV and RV metrics
         combined_df = pd.concat([lv_df, rv_df], ignore_index=True)
         combined_df.to_csv(f'results/edited_sax_df/{sax_series_uid}.csv', index=False)
+        st.session_state["saved"] = True
 
+    if st.session_state["saved"]:
+        if st.button('Next Patient ➡️', use_container_width=True):
+            st.session_state["view"] = "EDV/ESV Finder 🔍"
+            st.rerun()
