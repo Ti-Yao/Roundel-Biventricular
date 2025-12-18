@@ -4,20 +4,6 @@
 from roundel_app_biventricular_utils import *
 st.set_page_config(page_title="Roundel (Biventricular)", page_icon="⭕️", layout='wide')
 
-
-# key = 'x'
-# T = 20
-
-# st.slider(
-#     "w",
-#     -1,
-#     T + 1,
-#     value=0,
-#     key=key,
-#     on_change=wrap,
-#     args=(key, 0, T),
-# )
-
 # -----------------------------
 # Data paths and series info
 # -----------------------------
@@ -86,6 +72,7 @@ if view == "Final Result ✅":
     raw_image = raw["image"]
     raw_mask = raw["mask"]
     preprocessed_image = preprocessed["image"]
+
     H, W, D, T, N = [preprocessed[k] for k in ["H","W","D","T","N"]]
 
     crop_box = preprocessed['crop_box']
@@ -109,10 +96,11 @@ if view == "Final Result ✅":
 
     lv_mask = cv_zoom(st.session_state['edited_mask_lv'], zoom = [1/st.session_state['subpixel_resolution'],1/st.session_state['subpixel_resolution'],1,1])
     rv_mask = cv_zoom(st.session_state['edited_mask_rv'], zoom = [1/st.session_state['subpixel_resolution'],1/st.session_state['subpixel_resolution'],1,1])
+    combined_mask = lv_mask + rv_mask
 
     # Calculate LV metrics
     lv_volume, lv_masses, lv_edv, lv_esv, lv_sv, lv_ef, lv_mass = calculate_sax_metrics(
-        mask=lv_mask,
+        mask=combined_mask,
         pixelspacing=pixelspacing,
         thickness=thickness,
         blood_pool_idx=lv_idx,
@@ -132,7 +120,7 @@ if view == "Final Result ✅":
 
     # Calculate RV metrics
     rv_volume, rv_masses, rv_edv, rv_esv, rv_sv, rv_ef, rv_mass = calculate_sax_metrics(
-        mask=rv_mask,
+        mask=combined_mask,
         pixelspacing=pixelspacing,
         thickness=thickness,
         blood_pool_idx=rv_idx,
@@ -150,42 +138,37 @@ if view == "Final Result ✅":
         sys_idx=raw_rv_sys_idx
     )
 
-    # For LV
-    final_lv_mask = resize_to_original(
-        edited_mask=lv_mask,
-        raw_mask=raw_mask,
-        crop_box=crop_box,
-        dia_idx=lv_dia_idx,
-        sys_idx=lv_sys_idx
-    )
-
-    # For RV
-    final_rv_mask = resize_to_original(
-        edited_mask=rv_mask,
-        raw_mask=raw_mask,
-        crop_box=crop_box,
-        dia_idx=rv_dia_idx,
-        sys_idx=rv_sys_idx
-    )
 
     x_min, y_min, x_max, y_max = crop_box
+    final_mask_2d = np.zeros_like(raw_mask)
+    final_mask_2d[y_min:y_max, x_min:x_max, :, :, :] = combined_mask
+    final_mask_2d = np.argmax(final_mask_2d, axis=-1)
 
 
-    # Generate final GIFs
-    make_video(preprocessed_image[:,:,:,[lv_dia_idx,lv_sys_idx]], final_lv_mask[y_min:y_max,x_min:x_max,:,[lv_dia_idx,lv_sys_idx]], save_file=final_lv_gif_path, ventricle = 'lv')
-    make_video(preprocessed_image[:,:,:,[rv_dia_idx,rv_sys_idx]], final_rv_mask[y_min:y_max,x_min:x_max,:,[rv_dia_idx,rv_sys_idx]], save_file=final_rv_gif_path, ventricle = 'rv')
+    make_video(preprocessed_image, 
+               final_mask_2d[y_min:y_max,x_min:x_max,:,:], 
+               save_file=final_lv_gif_path, 
+               mask_frames=[lv_dia_idx,lv_sys_idx],
+               ventricle='all')
+    
+    make_video(preprocessed_image, 
+               final_mask_2d[y_min:y_max,x_min:x_max,:,:], 
+               save_file=final_rv_gif_path, 
+               mask_frames=[rv_dia_idx,rv_sys_idx],
+               ventricle='all')
+    
 
     col_lv, col_rv = st.columns(2)
     with col_lv:
         st.markdown('#### Left Ventricle')
 
-        col1, col2 = st.columns([0.2,0.8])
+        col1, col2 = st.columns([0.25,0.8])
         with col1:
             st.caption("LV Metrics")
-            st.metric("EDV", f"{lv_edv:.1f} mL", delta=format_delta(lv_edv, raw_lv_edv, " mL"))
-            st.metric("ESV", f"{lv_esv:.1f} mL", delta=format_delta(lv_esv, raw_lv_esv, " mL"))
-            st.metric("EF", f"{lv_ef:.1f} %", delta=format_delta(lv_ef, raw_lv_ef, " %", round_digits=1))
-            st.metric("Mass", f"{lv_mass:.1f} g", delta=format_delta(lv_mass, raw_lv_mass, " g"))
+            st.metric("EDV", f"{lv_edv:.1f}mL", delta=format_delta(lv_edv, raw_lv_edv, "mL"))
+            st.metric("ESV", f"{lv_esv:.1f}mL", delta=format_delta(lv_esv, raw_lv_esv, "mL"))
+            st.metric("EF", f"{lv_ef:.1f}%", delta=format_delta(lv_ef, raw_lv_ef, "%", round_digits=1))
+            st.metric("Mass", f"{lv_mass:.1f}g", delta=format_delta(lv_mass, raw_lv_mass, "g"))
 
         with col2:
             st.caption("Final LV Mask")
@@ -194,13 +177,13 @@ if view == "Final Result ✅":
     with col_rv:
         st.markdown('#### Right Ventricle')
 
-        col1, col2 = st.columns([0.2,0.8])
+        col1, col2 = st.columns([0.25,0.8])
         with col1:
             st.caption("RV Metrics")
-            st.metric("EDV", f"{rv_edv:.1f} mL", delta=format_delta(rv_edv, raw_rv_edv, " mL"))
-            st.metric("ESV", f"{rv_esv:.1f} mL", delta=format_delta(rv_esv, raw_rv_esv, " mL"))
-            st.metric("EF", f"{rv_ef:.1f} %", delta=format_delta(rv_ef, raw_rv_ef, " %", round_digits=1))
-            st.metric("Mass", f"{rv_mass:.1f} g", delta=format_delta(rv_mass, raw_rv_mass, " g"))
+            st.metric("EDV", f"{rv_edv:.1f}mL", delta=format_delta(rv_edv, raw_rv_edv, "mL"))
+            st.metric("ESV", f"{rv_esv:.1f}mL", delta=format_delta(rv_esv, raw_rv_esv, "mL"))
+            st.metric("EF", f"{rv_ef:.1f}%", delta=format_delta(rv_ef, raw_rv_ef, "%", round_digits=1))
+            st.metric("Mass", f"{rv_mass:.1f}g", delta=format_delta(rv_mass, raw_rv_mass, "g"))
 
 
         with col2:

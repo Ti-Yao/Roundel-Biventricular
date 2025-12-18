@@ -245,8 +245,13 @@ def initialize_app(data_path, sax_series_uid, N, preprocess=True):
         smoothed_image = cv_zoom(preprocessed_image, zoom = [st.session_state['subpixel_resolution'],st.session_state['subpixel_resolution'],1,1])
         smoothed_mask = smooth_zoom(preprocessed_mask, zoom = [st.session_state['subpixel_resolution'],st.session_state['subpixel_resolution'],1,1,1])
         
-        make_video(smoothed_image[:,:,has_masks[mid_slice-3:mid_slice+3],:], smoothed_mask[:,:,has_masks[mid_slice-3:mid_slice+3],:, :] * 0, save_file=edv_esv_gif_path)
-        make_video(smoothed_image, smoothed_mask*0, save_file=blank_gif_path)
+        make_video(smoothed_image[:,:,has_masks[mid_slice-3:mid_slice+3],:], 
+                   smoothed_mask[:,:,has_masks[mid_slice-3:mid_slice+3],:, :] * 0, 
+                   save_file=edv_esv_gif_path)
+        
+        make_video(smoothed_image, 
+                   smoothed_mask*0, 
+                   save_file=blank_gif_path)
 
         gif = Image.open(f'{edv_esv_gif_path}.gif')
 
@@ -259,6 +264,7 @@ def initialize_app(data_path, sax_series_uid, N, preprocess=True):
             "edv_esv_frames": [frame.copy() for frame in ImageSequence.Iterator(gif)],
             'crop_box':[x_min, y_min, x_max, y_max]
         }
+
     else:
         # No preprocessing, just use raw
         st.session_state.preprocessed = {
@@ -267,17 +273,19 @@ def initialize_app(data_path, sax_series_uid, N, preprocess=True):
             "H": raw_shape[0], "W": raw_shape[1], "D": raw_shape[2], "T": raw_shape[3], "N": N,
             "frames": None,
             'crop_box':[0, 0, raw_image.shape[0], raw_image.shape[1]]
-
         }
 
 
     # -----------------------------
     # Initialize edited mask
     # -----------------------------
-    st.session_state[f'edited_mask_lv'] = st.session_state.preprocessed["smooth_mask"].copy()
-    st.session_state[f'edited_mask_rv'] = st.session_state.preprocessed["smooth_mask"].copy()
+    st.session_state[f'edited_mask_lv'] = np.zeros_like(st.session_state.preprocessed["smooth_mask"])
+    st.session_state[f'edited_mask_rv'] = np.zeros_like(st.session_state.preprocessed["smooth_mask"])
     st.session_state[f'mask_hash_lv'] = mask_hash(st.session_state.preprocessed["smooth_mask"])
     st.session_state[f'mask_hash_rv'] = mask_hash(st.session_state.preprocessed["smooth_mask"])
+    st.session_state['lv_frames'] = None
+    st.session_state['rv_frames'] = None
+    st.session_state['edit_made'] = False
     st.session_state["view_mode"] = 'Static'
     st.session_state.initialized_all = True
 
@@ -347,7 +355,7 @@ def make_video(image, mask, save_file, ventricle = 'all', mask_frames = 'all',sc
     elif ventricle == 'lv':
         channels = [lv_idx, lv_myo_idx]
     else:
-        channels = np.arange(N)
+        channels = [n for n in np.arange(N) if n != background_idx]
 
     if mask.shape[-1]!=N:
         mask = np.eye(N, dtype=np.uint8)[mask]
@@ -419,8 +427,14 @@ def make_video(image, mask, save_file, ventricle = 'all', mask_frames = 'all',sc
         )
 
         frames.append(canvas.convert("RGB"))
+
+    if len(mask_frames) < 5:
+        fps = len(mask_frames)/2
+    else:
+        fps = np.clip(len(mask_frames) / 2, 8, 15)
+
     save_file = save_file.replace('.gif','')
-    imageio.mimsave(f'{save_file}.gif', frames, fps=timesteps/2, loop=0)
+    imageio.mimsave(f'{save_file}.gif', frames, fps=fps, loop=0)
 
 
 
@@ -654,6 +668,17 @@ def frame_index_slider(
     st.image(frames[idx], use_container_width=True)
     return idx
 
+def copy_frames_channels(mask_name, dia_idx, sys_idx, blood_idx, myo_idx):
+    frames = [dia_idx, sys_idx]
+    channels = [blood_idx, myo_idx]
+
+    mask = st.session_state[mask_name]
+    smooth_mask = st.session_state.preprocessed["smooth_mask"]
+
+    # Loop over frames and channels to ensure proper assignment
+    for f in frames:
+        for c in channels:
+            mask[:, :, :, f, c] = smooth_mask[:, :, :, f, c]
 
 def confirm_selection(lv_dia_idx, lv_sys_idx,rv_dia_idx, rv_sys_idx):
     """Store confirmed EDV/ESV indices in session state."""
@@ -665,22 +690,36 @@ def confirm_selection(lv_dia_idx, lv_sys_idx,rv_dia_idx, rv_sys_idx):
         "confirmed": True
     })
 
+    # LV
+    copy_frames_channels('edited_mask_lv', lv_dia_idx, lv_sys_idx, lv_idx, lv_myo_idx)
+
+    # RV
+    copy_frames_channels('edited_mask_rv', rv_dia_idx, rv_sys_idx, rv_idx, rv_myo_idx)
 
     make_video(
-        st.session_state.preprocessed['smooth_image'][:,:,:, [lv_dia_idx, lv_sys_idx]],
-        st.session_state.preprocessed['smooth_mask'][:,:,:, [lv_dia_idx, lv_sys_idx], :],
+        st.session_state.preprocessed['smooth_image'],
+        st.session_state['edited_mask_lv'],
+        mask_frames = [lv_dia_idx, lv_sys_idx],
         save_file=f'{edited_gif_path}_lv',
-        ventricle = 'lv'
 
     )
 
     make_video(
-        st.session_state.preprocessed['smooth_image'][:,:,:, [rv_dia_idx, rv_sys_idx]],
-        st.session_state.preprocessed['smooth_mask'][:,:,:, [rv_dia_idx, rv_sys_idx], :],
+        st.session_state.preprocessed['smooth_image'],
+        st.session_state['edited_mask_rv'],
+        mask_frames = [rv_dia_idx, rv_sys_idx],
         save_file=f'{edited_gif_path}_rv',
         ventricle = 'rv'
-
     )
+
+    gif = Image.open(f'{edited_gif_path}_lv.gif')
+    lv_frames = [frame.copy() for frame in ImageSequence.Iterator(gif)]
+    st.session_state['lv_frames'] = lv_frames
+
+
+    gif = Image.open(f'{edited_gif_path}_rv.gif')
+    rv_frames = [frame.copy() for frame in ImageSequence.Iterator(gif)]
+    st.session_state['rv_frames'] = rv_frames
 
 def edv_esv_view():
     """Full EDV/ESV Finder view layout."""
@@ -777,9 +816,9 @@ def select_brush(N, ventricle):
     stroke_width = stroke_width_map[stroke_width_sel]
 
     if ventricle == 'lv':
-        valid_channels = [i for i in range(N) if i in [lv_myo_idx, lv_idx]]
+        valid_channels = [lv_myo_idx, lv_idx]
     elif ventricle == 'rv':
-        valid_channels = [i for i in range(N) if i in [rv_myo_idx, rv_idx]]
+        valid_channels = [rv_myo_idx, rv_idx]
     else:
         valid_channels = [i for i in range(N) if i != background_idx]
 
@@ -850,7 +889,7 @@ def mask_editor_view():
                 height=DISPLAY_H,
                 width=DISPLAY_W,
                 drawing_mode='freedraw',
-                key=st.session_state['canvas']['canvas_key']
+                key=st.session_state['canvas']['canvas_key'] + ventricle
             )
 
 
@@ -872,7 +911,6 @@ def mask_editor_view():
             col1, col2= st.columns([1, 0.3])
             edited_mask = st.session_state[f'edited_mask_{ventricle}']
 
-
             with col1:
                 save_contour = st.button('Save Contour', type='primary', use_container_width=True)
                 if canvas_result and canvas_result.image_data is not None:
@@ -883,17 +921,10 @@ def mask_editor_view():
                         rgb = brush_data[:, :, :3].astype(np.float32)
                         alpha = brush_data[:, :, 3].astype(np.float32) / 255.0
 
-                        ventricle_indices = [
-                            idx for idx, label in BRUSH_LABELS.items()
-                            if ventricle in label.lower()
-                        ]
+                        ventricle_indices = [idx for idx, label in BRUSH_LABELS.items() if ventricle in label.lower()]
 
                         # myocardium before blood pool
-                        overlay_channels = sorted(
-                            ventricle_indices,
-                            key=lambda idx: 0 if 'myocardium' in BRUSH_LABELS[idx].lower() else 1
-                        )
-
+                        overlay_channels = sorted(ventricle_indices, key=lambda idx: 0 if 'myocardium' in BRUSH_LABELS[idx].lower() else 1)
                         overlay_colors_list = np.array([OVERLAY_COLORS[i][:3] for i in overlay_channels], dtype=np.float32)
 
                         h, w, _ = rgb.shape
@@ -927,48 +958,73 @@ def mask_editor_view():
                             edited_mask[:, :, d, idx, :][resized_mask > 0] = 0
                             # Apply current channel
                             edited_mask[:, :, d, idx, channel][resized_mask > 0] = 1
+                        st.session_state['edit_made'] = True
+                        
                         st.rerun()
 
             with col2:
                 if st.button('Clear Slice', use_container_width=True):
                     edited_mask[:,:,d,idx,:] = 0
+                    st.session_state['edit_made'] = True
                     st.rerun()
+
+            st.session_state[f'edited_mask_{ventricle}'] = edited_mask
+            
 
 
 
 
     with col3:
-        st.caption('Corrected Mask')
-        if mask_hash(st.session_state[f'edited_mask_{ventricle}']) != st.session_state[f'mask_hash_{ventricle}']:
+        
+        view_mode = st.radio(
+            'Corrected Mask',
+            ['Static','Viewer'],
+            index=['Static','Viewer'].index(st.session_state["view_mode"]),
+            horizontal=True
+        )
+        st.session_state["view_mode"] = view_mode
+
+        if st.session_state[f'{ventricle}_frames'] is None or st.session_state['edit_made']:
             make_video(
-                image[:,:,:, [dia_idx, sys_idx]],
-                st.session_state[f'edited_mask_{ventricle}'][:,:,:, [dia_idx, sys_idx], :],
+                image,
+                st.session_state[f'edited_mask_{ventricle}'],
                 save_file=f'{edited_gif_path}_{ventricle}',
+                mask_frames = [dia_idx, sys_idx],
                 ventricle = ventricle
 
             )
             st.session_state[f'mask_hash_{ventricle}'] = mask_hash(st.session_state[f'edited_mask_{ventricle}'])
-
-        gif = Image.open(f'{edited_gif_path}_{ventricle}.gif')
-        frames = [frame.copy() for frame in ImageSequence.Iterator(gif)]
+            gif = Image.open(f'{edited_gif_path}_{ventricle}.gif')
+            lv_frames = [frame.copy() for frame in ImageSequence.Iterator(gif)]
+            st.session_state[f'{ventricle}_frames'] = lv_frames
+            st.session_state['edit_made'] = False
 
         if "End-Diastole" in idx_label:
             view_idx = 0
         else:
             view_idx = 1
 
-        st.image(frames[view_idx])
+        if view_mode == 'Viewer':
+            st.image(image_slice, width=DISPLAY_W)
+        elif view_mode == 'Static':
+            st.image(st.session_state[f'{ventricle}_frames'][view_idx])
 
 
 
-def resize_to_original(edited_mask, raw_mask, crop_box, dia_idx, sys_idx):
+def resize_to_original(edited_mask, raw_mask, crop_box, dia_idx, sys_idx, ventricle):
     """
     Place the edited mask back into the original full-size mask array.
-    Assumes edited_mask has same channels as raw_mask and shape (H_crop, W_crop, C, 2, num_classes)
+    Assumes edited_mask has shape (H_crop, W_crop, C, 2, num_classes)
     """
     x_min, y_min, x_max, y_max = crop_box
-    final_mask_2d = np.zeros(raw_mask.shape, dtype=raw_mask.dtype)
-    final_mask_2d[y_min:y_max, x_min:x_max, :, [dia_idx, sys_idx], 1:] = edited_mask[:, :, :, [dia_idx, sys_idx], 1:]
-    final_mask_2d = np.argmax(final_mask_2d, axis=-1)
-    return final_mask_2d
+    final_mask_2d = np.zeros_like(raw_mask)
 
+    channels = [rv_idx, rv_myo_idx] if ventricle == 'rv' else [lv_idx, lv_myo_idx]
+
+    for ch in channels:
+        final_mask_2d[y_min:y_max, x_min:x_max, ch, dia_idx, :] = edited_mask[:, :, ch, dia_idx, :]
+        final_mask_2d[y_min:y_max, x_min:x_max, ch, sys_idx, :] = edited_mask[:, :, ch, sys_idx, :]
+
+    final_mask_2d = np.argmax(final_mask_2d, axis=-1)
+    print(np.unique(final_mask_2d))
+    return final_mask_2d
