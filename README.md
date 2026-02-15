@@ -1,4 +1,14 @@
-# Data Directory Structure
+# Roundel
+
+Short-Axis Segementation App.
+
+
+[Demo](Roundel_Demo.mp4)
+
+
+
+
+### Data Structure
 
 data/
 └── {subfolder_name}/     
@@ -7,7 +17,7 @@ data/
     └── sax_df___{pat_id}.csv
 
 
-## File Descriptions
+### File Descriptions
 
 image___{pat_id}.nii.gz  
 NIfTI image file for a single patient.  
@@ -23,7 +33,7 @@ saxdf___{pat_id}.csv
 CSV file containing acquisition metadata.
 
 
-## saxdf CSV Structure
+### saxdf CSV Structure
 
 Columns:
 - pixelspacing
