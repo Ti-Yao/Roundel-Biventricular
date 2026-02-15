@@ -3,7 +3,7 @@
 Short-Axis Segementation App.
 
 
-[Demo](Roundel_Demo.mp4)
+[Demo](Roundel_Demo.gif)
 
 
 
